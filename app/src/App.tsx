@@ -84,7 +84,7 @@ function App() {
     return Math.max(0, Math.min(idx, list.length - 1));
   }, []);
 
-  const clampNoteIndex = useCallback((idx: number, notes: string[]) => {
+  const clampNoteIndex = useCallback((idx: number, notes: Note[]) => {
     if (notes.length === 0) return 0;
     return Math.max(0, Math.min(idx, notes.length - 1));
   }, []);
