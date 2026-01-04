@@ -13,7 +13,9 @@ use tauri::{
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
 #[cfg(target_os = "macos")]
-use cocoa::appkit::{NSApp, NSApplication, NSApplicationActivationPolicy};
+use objc2::MainThreadMarker;
+#[cfg(target_os = "macos")]
+use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct Note {
@@ -159,9 +161,10 @@ pub fn run() {
         .setup(|app| {
             // Hide from dock on macOS
             #[cfg(target_os = "macos")]
-            unsafe {
-                let ns_app = NSApp();
-                ns_app.setActivationPolicy_(NSApplicationActivationPolicy::NSApplicationActivationPolicyAccessory);
+            {
+                let mtm = MainThreadMarker::new().unwrap();
+                let ns_app = NSApplication::sharedApplication(mtm);
+                ns_app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
             }
 
             // Create tray menu

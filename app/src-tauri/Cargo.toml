@@ -23,5 +23,5 @@ dirs = "5"
 chrono = "0.4"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-cocoa = "0.26"
-objc = "0.2"
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSRunningApplication"] }
