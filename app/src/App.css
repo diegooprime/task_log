@@ -285,10 +285,6 @@ body {
   outline: none;
 }
 
-.container:focus {
-  outline: none;
-}
-
 /* Link styles */
 .task-link {
   color: var(--accent);

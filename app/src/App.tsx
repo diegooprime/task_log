@@ -49,7 +49,6 @@ function App() {
   const [isCreatingNote, setIsCreatingNote] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const noteInputRef = useRef<HTMLInputElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
 
   const currentList = activePane === 'current' ? tasks.current : tasks.shelf;
   const otherList = activePane === 'current' ? tasks.shelf : tasks.current;
@@ -77,32 +76,18 @@ function App() {
     }
   }, [expandedIndex]);
 
-  // Fix focus when window regains focus
+  // Reload tasks when window regains focus to ensure fresh state
   useEffect(() => {
     const handleWindowFocus = () => {
-      // Refocus container when window regains focus (only if not editing)
-      if (editingIndex === null && !isCreating && editingNoteIndex === null && !isCreatingNote) {
-        containerRef.current?.focus();
-      }
+      getTasks().then(setTasks);
     };
     
-    const handleVisibilityChange = () => {
-      if (!document.hidden) {
-        handleWindowFocus();
-      }
-    };
-
     window.addEventListener('focus', handleWindowFocus);
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    
-    // Initial focus
-    containerRef.current?.focus();
     
     return () => {
       window.removeEventListener('focus', handleWindowFocus);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [editingIndex, isCreating, editingNoteIndex, isCreatingNote]);
+  }, []);
 
   const pushHistory = useCallback((state: TaskState) => {
     setHistory(prev => {
@@ -641,14 +626,7 @@ function App() {
   };
 
   return (
-    <div 
-      className="container" 
-      ref={containerRef} 
-      tabIndex={0}
-      onFocus={() => {
-        // Ensure we can receive keyboard events
-      }}
-    >
+    <div className="container">
       {renderPane(activePane, currentList)}
     </div>
   );
