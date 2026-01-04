@@ -2,6 +2,32 @@ import { useEffect, useState, useRef, useCallback } from 'react';
 import { getTasks, saveTasks, completeTask, hideWindow, TaskState, Task, Note } from './store';
 import './App.css';
 
+// Helper to render text with clickable links
+const renderTextWithLinks = (text: string) => {
+  const urlRegex = /(https?:\/\/[^\s]+)/g;
+  const parts = text.split(urlRegex);
+  
+  return parts.map((part, index) => {
+    if (urlRegex.test(part)) {
+      // Reset regex lastIndex
+      urlRegex.lastIndex = 0;
+      return (
+        <a 
+          key={index} 
+          href={part} 
+          target="_blank" 
+          rel="noopener noreferrer"
+          onClick={(e) => e.stopPropagation()}
+          className="task-link"
+        >
+          {part.length > 40 ? part.substring(0, 40) + '...' : part}
+        </a>
+      );
+    }
+    return part;
+  });
+};
+
 type Pane = 'current' | 'shelf';
 
 const MAX_CURRENT = 5;
@@ -23,6 +49,7 @@ function App() {
   const [isCreatingNote, setIsCreatingNote] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const noteInputRef = useRef<HTMLInputElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   const currentList = activePane === 'current' ? tasks.current : tasks.shelf;
   const otherList = activePane === 'current' ? tasks.shelf : tasks.current;
@@ -49,6 +76,33 @@ function App() {
       setSelectedNoteIndex(0);
     }
   }, [expandedIndex]);
+
+  // Fix focus when window regains focus
+  useEffect(() => {
+    const handleFocus = () => {
+      // Refocus container when window regains focus
+      if (!editingIndex && !isCreating && !editingNoteIndex && !isCreatingNote) {
+        containerRef.current?.focus();
+      }
+    };
+    
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        handleFocus();
+      }
+    };
+
+    window.addEventListener('focus', handleFocus);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    
+    // Initial focus
+    containerRef.current?.focus();
+    
+    return () => {
+      window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [editingIndex, isCreating, editingNoteIndex, isCreatingNote]);
 
   const pushHistory = useCallback((state: TaskState) => {
     setHistory(prev => {
@@ -348,7 +402,7 @@ function App() {
     }
   };
 
-  const handleCreateSubmit = async () => {
+  const handleCreateSubmit = async (continueAdding: boolean = false) => {
     if (editValue.trim()) {
       const newTask: Task = { text: editValue.trim(), notes: [] };
       // Check capacity for current pane
@@ -357,12 +411,8 @@ function App() {
         const newState = { ...tasks, shelf: [...tasks.shelf, newTask] };
         await persist(newState);
       } else {
-        const insertIndex = selectedIndex + 1;
-        const newList = [
-          ...currentList.slice(0, insertIndex),
-          newTask,
-          ...currentList.slice(insertIndex)
-        ];
+        const insertIndex = currentList.length;
+        const newList = [...currentList, newTask];
         const newState = activePane === 'current'
           ? { ...tasks, current: newList }
           : { ...tasks, shelf: newList };
@@ -370,8 +420,14 @@ function App() {
         setSelectedIndex(insertIndex);
       }
     }
-    setIsCreating(false);
-    setEditValue('');
+    
+    if (continueAdding && editValue.trim()) {
+      // Clear the input but stay in creating mode
+      setEditValue('');
+    } else if (!continueAdding || !editValue.trim()) {
+      setIsCreating(false);
+      setEditValue('');
+    }
   };
 
   const handleNoteEditSubmit = async () => {
@@ -420,7 +476,8 @@ function App() {
       if (editingIndex !== null) {
         handleEditSubmit();
       } else if (isCreating) {
-        handleCreateSubmit();
+        // Enter saves and opens new input for next task
+        handleCreateSubmit(true);
       }
     } else if (e.key === 'Escape') {
       e.preventDefault();
@@ -473,7 +530,11 @@ function App() {
                   className={`task ${isSelected ? 'selected' : ''} ${isFlashing ? 'flash' : ''}`}
                 >
                   <span className="cursor">{isSelected ? '›' : ' '}</span>
-                  {isCurrent && <span className="task-number">{idx + 1}.</span>}
+                  {isCurrent ? (
+                    <span className="task-number">{idx + 1}.</span>
+                  ) : (
+                    <span className="task-bullet">•</span>
+                  )}
                   {isEditing ? (
                     <input
                       ref={inputRef}
@@ -487,7 +548,7 @@ function App() {
                     />
                   ) : (
                     <span className="task-text">
-                      {task.text}
+                      {renderTextWithLinks(task.text)}
                       {task.notes.length > 0 && (
                         <span className="note-indicator"> ({task.notes.length})</span>
                       )}
@@ -525,7 +586,7 @@ function App() {
                               autoFocus
                             />
                           ) : (
-                            <span className="note-text">{note.text}</span>
+                            <span className="note-text">{renderTextWithLinks(note.text)}</span>
                           )}
                         </div>
                       );
@@ -555,14 +616,18 @@ function App() {
             <div className="task-container">
               <div className="task selected creating">
                 <span className="cursor">›</span>
-                {isCurrent && <span className="task-number">{items.length + 1}.</span>}
+                {isCurrent ? (
+                  <span className="task-number">{items.length + 1}.</span>
+                ) : (
+                  <span className="task-bullet">•</span>
+                )}
                 <input
                   ref={inputRef}
                   type="text"
                   value={editValue}
                   onChange={(e) => setEditValue(e.target.value)}
                   onKeyDown={handleInputKeyDown}
-                  onBlur={handleCreateSubmit}
+                  onBlur={() => handleCreateSubmit(false)}
                   className="task-input"
                   placeholder="New task..."
                   autoFocus
@@ -576,7 +641,14 @@ function App() {
   };
 
   return (
-    <div className="container">
+    <div 
+      className="container" 
+      ref={containerRef} 
+      tabIndex={0}
+      onFocus={() => {
+        // Ensure we can receive keyboard events
+      }}
+    >
       {renderPane(activePane, currentList)}
     </div>
   );

@@ -156,6 +156,13 @@ body {
   flex-shrink: 0;
 }
 
+.task-bullet {
+  color: var(--accent);
+  font-size: 14px;
+  min-width: 18px;
+  flex-shrink: 0;
+}
+
 .task-text {
   flex: 1;
   word-wrap: break-word;
@@ -276,4 +283,28 @@ body {
 /* Focus styles */
 :focus-visible {
   outline: none;
+}
+
+.container:focus {
+  outline: none;
+}
+
+/* Link styles */
+.task-link {
+  color: var(--accent);
+  text-decoration: underline;
+  cursor: pointer;
+  transition: color 0.1s ease;
+}
+
+.task-link:hover {
+  color: var(--accent-dim);
+}
+
+.note-text .task-link {
+  color: var(--accent);
+}
+
+.note.completed .task-link {
+  color: var(--text-muted);
 }
