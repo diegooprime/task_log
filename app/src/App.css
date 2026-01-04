@@ -6,6 +6,7 @@
   --text-secondary: #888888;
   --text-muted: #4a4a4a;
   --accent: #5e9fff;
+  --accent-red: #ff6b6b;
   --accent-dim: #3a6bb3;
   --border: #222228;
   --done-flash: #2d5a3d;
@@ -35,9 +36,11 @@ body {
 }
 
 .container {
+  width: 400px;
+  height: 500px;
   display: flex;
-  height: 100vh;
   background: var(--bg-primary);
+  overflow: hidden;
 }
 
 .pane {
@@ -45,16 +48,8 @@ body {
   display: flex;
   flex-direction: column;
   padding: 16px;
-  border-right: 1px solid var(--border);
-  transition: background 0.1s ease;
-}
-
-.pane:last-child {
-  border-right: none;
-}
-
-.pane.active {
   background: var(--bg-secondary);
+  height: 100%;
 }
 
 .pane.shake {
@@ -73,13 +68,16 @@ body {
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.1em;
-  color: var(--text-muted);
   margin-bottom: 12px;
   padding-bottom: 8px;
   border-bottom: 1px solid var(--border);
 }
 
-.pane.active .pane-header {
+.pane-header.current {
+  color: var(--accent-red);
+}
+
+.pane-header.shelf {
   color: var(--accent);
 }
 
@@ -109,11 +107,15 @@ body {
   padding: 4px 0;
 }
 
+.task-container {
+  margin-bottom: 2px;
+}
+
 .task {
   display: flex;
   align-items: flex-start;
   padding: 4px 0;
-  gap: 8px;
+  gap: 6px;
   transition: background 0.1s ease;
   border-radius: 3px;
 }
@@ -144,10 +146,22 @@ body {
   opacity: 1;
 }
 
+.task-number {
+  color: var(--text-muted);
+  font-size: 12px;
+  min-width: 18px;
+  flex-shrink: 0;
+}
+
 .task-text {
   flex: 1;
   word-wrap: break-word;
   overflow-wrap: break-word;
+}
+
+.note-indicator {
+  color: var(--text-muted);
+  font-size: 11px;
 }
 
 .task-input {
@@ -169,6 +183,81 @@ body {
 
 .task.creating {
   background: var(--bg-hover);
+}
+
+/* Notes/Checklist styles */
+.notes-container {
+  margin-left: 24px;
+  padding: 8px 0 8px 0;
+  margin-top: 4px;
+}
+
+.empty-notes {
+  color: var(--text-muted);
+  font-style: italic;
+  font-size: 12px;
+  padding: 4px 0;
+}
+
+.note {
+  display: flex;
+  align-items: center;
+  padding: 5px 8px;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  border-radius: 3px;
+  transition: background 0.1s ease;
+}
+
+.note.selected {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.note.creating {
+  color: var(--text-primary);
+}
+
+.note-radio {
+  color: var(--accent-red);
+  font-size: 14px;
+  flex-shrink: 0;
+  width: 16px;
+  text-align: center;
+  line-height: 1;
+}
+
+.note.selected .note-radio {
+  color: var(--accent-red);
+}
+
+.note-text {
+  flex: 1;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  cursor: pointer;
+}
+
+.note-text:hover {
+  color: var(--text-primary);
+}
+
+.note-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.5;
+  outline: none;
+  padding: 0;
+  margin: 0;
+}
+
+.note-input::placeholder {
+  color: var(--text-muted);
 }
 
 /* Focus styles */

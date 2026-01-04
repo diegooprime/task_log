@@ -1,8 +1,13 @@
 import { invoke } from '@tauri-apps/api/core';
 
+export interface Task {
+  text: string;
+  notes: string[];
+}
+
 export interface TaskState {
-  current: string[];
-  shelf: string[];
+  current: Task[];
+  shelf: Task[];
 }
 
 export async function getTasks(): Promise<TaskState> {
@@ -13,8 +18,8 @@ export async function saveTasks(state: TaskState): Promise<void> {
   await invoke('save_state', { newState: state });
 }
 
-export async function completeTask(task: string): Promise<void> {
-  await invoke('complete_task', { task });
+export async function completeTask(task: Task): Promise<void> {
+  await invoke('complete_task', { task: task.text });
 }
 
 export async function hideWindow(): Promise<void> {
