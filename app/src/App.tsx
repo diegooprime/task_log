@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { getTasks, saveTasks, completeTask, hideWindow, TaskState, Task } from './store';
+import { getTasks, saveTasks, completeTask, hideWindow, TaskState, Task, Note } from './store';
 import './App.css';
 
 type Pane = 'current' | 'shelf';
@@ -198,7 +198,7 @@ function App() {
           // Edit selected note
           if (currentNotes.length > 0) {
             setEditingNoteIndex(selectedNoteIndex);
-            setEditValue(currentNotes[selectedNoteIndex]);
+            setEditValue(currentNotes[selectedNoteIndex].text);
           } else {
             // No notes yet, create one
             setIsCreatingNote(true);
@@ -227,9 +227,23 @@ function App() {
         break;
       case 'Enter':
         if (e.metaKey || e.ctrlKey) {
-          // Cmd+Enter or Ctrl+Enter - complete task (mark as done)
+          // Cmd+Enter or Ctrl+Enter
           e.preventDefault();
-          if (currentList.length > 0) {
+          if (expandedIndex !== null && currentNotes.length > 0) {
+            // Toggle completion of selected note (not the parent task)
+            const newList = [...currentList];
+            const newNotes = [...newList[expandedIndex].notes];
+            newNotes[selectedNoteIndex] = { 
+              ...newNotes[selectedNoteIndex], 
+              completed: !newNotes[selectedNoteIndex].completed 
+            };
+            newList[expandedIndex] = { ...newList[expandedIndex], notes: newNotes };
+            const newState = activePane === 'current'
+              ? { ...tasks, current: newList }
+              : { ...tasks, shelf: newList };
+            persist(newState);
+          } else if (currentList.length > 0) {
+            // Complete the parent task (only when task itself is focused)
             const taskToComplete = currentList[selectedIndex];
             setFlashIndex(selectedIndex);
             
@@ -365,7 +379,7 @@ function App() {
       if (editValue.trim()) {
         const newList = [...currentList];
         const newNotes = [...newList[expandedIndex].notes];
-        newNotes[editingNoteIndex] = editValue.trim();
+        newNotes[editingNoteIndex] = { ...newNotes[editingNoteIndex], text: editValue.trim() };
         newList[expandedIndex] = { ...newList[expandedIndex], notes: newNotes };
         const newState = activePane === 'current'
           ? { ...tasks, current: newList }
@@ -380,7 +394,8 @@ function App() {
   const handleNoteCreateSubmit = async (continueAdding: boolean = false) => {
     if (editValue.trim() && expandedIndex !== null) {
       const newList = [...currentList];
-      const newNotes = [...newList[expandedIndex].notes, editValue.trim()];
+      const newNote: Note = { text: editValue.trim(), completed: false };
+      const newNotes = [...newList[expandedIndex].notes, newNote];
       newList[expandedIndex] = { ...newList[expandedIndex], notes: newNotes };
       const newState = activePane === 'current'
         ? { ...tasks, current: newList }
@@ -487,16 +502,17 @@ function App() {
                     {task.notes.map((note, noteIdx) => {
                       const isNoteSelected = selectedNoteIndex === noteIdx;
                       const isNoteEditing = editingNoteIndex === noteIdx;
+                      const isNoteCompleted = note.completed;
                       
                       return (
                         <div 
                           key={noteIdx} 
-                          className={`note ${isNoteSelected ? 'selected' : ''}`}
+                          className={`note ${isNoteSelected ? 'selected' : ''} ${isNoteCompleted ? 'completed' : ''}`}
                           onClick={() => {
                             setSelectedNoteIndex(noteIdx);
                           }}
                         >
-                          <span className="note-radio">{isNoteSelected ? '◉' : '○'}</span>
+                          <span className="note-radio">{isNoteCompleted ? '✓' : (isNoteSelected ? '◉' : '○')}</span>
                           {isNoteEditing ? (
                             <input
                               ref={noteInputRef}
@@ -509,7 +525,7 @@ function App() {
                               autoFocus
                             />
                           ) : (
-                            <span className="note-text">{note}</span>
+                            <span className="note-text">{note.text}</span>
                           )}
                         </div>
                       );

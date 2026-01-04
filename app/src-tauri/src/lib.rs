@@ -16,10 +16,17 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut,
 use cocoa::appkit::{NSApp, NSApplication, NSApplicationActivationPolicy};
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct Note {
+    pub text: String,
+    #[serde(default)]
+    pub completed: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct Task {
     pub text: String,
     #[serde(default)]
-    pub notes: Vec<String>,
+    pub notes: Vec<Note>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]

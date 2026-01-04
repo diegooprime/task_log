@@ -1,8 +1,13 @@
 import { invoke } from '@tauri-apps/api/core';
 
+export interface Note {
+  text: string;
+  completed: boolean;
+}
+
 export interface Task {
   text: string;
-  notes: string[];
+  notes: Note[];
 }
 
 export interface TaskState {
