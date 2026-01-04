@@ -1,21 +1,32 @@
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import { getTasks, saveTasks, completeTask, hideWindow, TaskState, Task, Note } from './store';
 import './App.css';
+
+// Debounce helper
+function debounce<T extends (...args: Parameters<T>) => void>(
+  fn: T,
+  delay: number
+): (...args: Parameters<T>) => void {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  return (...args: Parameters<T>) => {
+    if (timeoutId) clearTimeout(timeoutId);
+    timeoutId = setTimeout(() => fn(...args), delay);
+  };
+}
 
 // Helper to render text with clickable links
 const renderTextWithLinks = (text: string) => {
   const urlRegex = /(https?:\/\/[^\s]+)/g;
   const parts = text.split(urlRegex);
-  
+
   return parts.map((part, index) => {
-    if (urlRegex.test(part)) {
-      // Reset regex lastIndex
-      urlRegex.lastIndex = 0;
+    // Use a fresh regex test without global state issues
+    if (/^https?:\/\/[^\s]+$/.test(part)) {
       return (
-        <a 
-          key={index} 
-          href={part} 
-          target="_blank" 
+        <a
+          key={index}
+          href={part}
+          target="_blank"
           rel="noopener noreferrer"
           onClick={(e) => e.stopPropagation()}
           className="task-link"
@@ -47,8 +58,27 @@ function App() {
   const [selectedNoteIndex, setSelectedNoteIndex] = useState(0);
   const [editingNoteIndex, setEditingNoteIndex] = useState<number | null>(null);
   const [isCreatingNote, setIsCreatingNote] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
+  const [saveIndicator, setSaveIndicator] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const noteInputRef = useRef<HTMLInputElement>(null);
+  const tasksRef = useRef<TaskState>(tasks);
+
+  // Keep ref in sync with state
+  useEffect(() => {
+    tasksRef.current = tasks;
+  }, [tasks]);
+
+  // Debounced save to reduce disk writes with visual feedback
+  const debouncedSave = useMemo(
+    () => debounce((state: TaskState) => {
+      saveTasks(state).then(() => {
+        setSaveIndicator(true);
+        setTimeout(() => setSaveIndicator(false), 600);
+      });
+    }, 300),
+    []
+  );
 
   const currentList = activePane === 'current' ? tasks.current : tasks.shelf;
   const otherList = activePane === 'current' ? tasks.shelf : tasks.current;
@@ -79,11 +109,15 @@ function App() {
   // Reload tasks when window regains focus to ensure fresh state
   useEffect(() => {
     const handleWindowFocus = () => {
-      getTasks().then(setTasks);
+      getTasks().then((loadedTasks) => {
+        setTasks(loadedTasks);
+        // Clear history since we're loading fresh state from disk
+        setHistory([]);
+      });
     };
-    
+
     window.addEventListener('focus', handleWindowFocus);
-    
+
     return () => {
       window.removeEventListener('focus', handleWindowFocus);
     };
@@ -99,11 +133,12 @@ function App() {
     });
   }, []);
 
-  const persist = useCallback(async (newState: TaskState) => {
-    pushHistory(tasks); // Save current state to history before changing
+  const persist = useCallback((newState: TaskState) => {
+    // Use ref to get current state, avoiding stale closure
+    pushHistory(tasksRef.current);
     setTasks(newState);
-    await saveTasks(newState);
-  }, [tasks, pushHistory]);
+    debouncedSave(newState);
+  }, [pushHistory, debouncedSave]);
 
   const undo = useCallback(async () => {
     if (history.length > 0) {
@@ -222,10 +257,8 @@ function App() {
         break;
       case 'Tab':
         e.preventDefault();
-        if (expandedIndex !== null) {
-          setExpandedIndex(null);
-          return;
-        }
+        // Always close expanded view when switching panes
+        setExpandedIndex(null);
         // Toggle between panes
         const newPane: Pane = activePane === 'current' ? 'shelf' : 'current';
         const newList = newPane === 'current' ? tasks.current : tasks.shelf;
@@ -235,17 +268,21 @@ function App() {
       case 'a':
         if (expandedIndex !== null) {
           // Edit selected note
-          if (currentNotes.length > 0) {
-            setEditingNoteIndex(selectedNoteIndex);
-            setEditValue(currentNotes[selectedNoteIndex].text);
+          const safeNoteIdx = clampNoteIndex(selectedNoteIndex, currentNotes);
+          if (currentNotes.length > 0 && currentNotes[safeNoteIdx]) {
+            setSelectedNoteIndex(safeNoteIdx);
+            setEditingNoteIndex(safeNoteIdx);
+            setEditValue(currentNotes[safeNoteIdx].text);
           } else {
             // No notes yet, create one
             setIsCreatingNote(true);
             setEditValue('');
           }
         } else if (currentList.length > 0) {
-          setEditingIndex(selectedIndex);
-          setEditValue(currentList[selectedIndex].text);
+          const safeIdx = clampIndex(selectedIndex, currentList);
+          setSelectedIndex(safeIdx);
+          setEditingIndex(safeIdx);
+          setEditValue(currentList[safeIdx].text);
         }
         break;
       case 'o':
@@ -270,30 +307,41 @@ function App() {
           e.preventDefault();
           if (expandedIndex !== null && currentNotes.length > 0) {
             // Toggle completion of selected note (not the parent task)
-            const newList = [...currentList];
-            const newNotes = [...newList[expandedIndex].notes];
-            newNotes[selectedNoteIndex] = { 
-              ...newNotes[selectedNoteIndex], 
-              completed: !newNotes[selectedNoteIndex].completed 
-            };
-            newList[expandedIndex] = { ...newList[expandedIndex], notes: newNotes };
-            const newState = activePane === 'current'
-              ? { ...tasks, current: newList }
-              : { ...tasks, shelf: newList };
-            persist(newState);
-          } else if (currentList.length > 0) {
-            // Complete the parent task (only when task itself is focused)
-            const taskToComplete = currentList[selectedIndex];
-            setFlashIndex(selectedIndex);
-            
-            setTimeout(async () => {
-              await completeTask(taskToComplete);
-              const newList = currentList.filter((_, i) => i !== selectedIndex);
+            const safeNoteIdx = clampNoteIndex(selectedNoteIndex, currentNotes);
+            if (currentNotes[safeNoteIdx]) {
+              const newList = [...currentList];
+              const newNotes = [...newList[expandedIndex].notes];
+              newNotes[safeNoteIdx] = {
+                ...newNotes[safeNoteIdx],
+                completed: !newNotes[safeNoteIdx].completed
+              };
+              newList[expandedIndex] = { ...newList[expandedIndex], notes: newNotes };
               const newState = activePane === 'current'
                 ? { ...tasks, current: newList }
                 : { ...tasks, shelf: newList };
-              await persist(newState);
-              setSelectedIndex(clampIndex(selectedIndex, newList));
+              persist(newState);
+              setSelectedNoteIndex(safeNoteIdx);
+            }
+          } else if (currentList.length > 0) {
+            // Complete the parent task (only when task itself is focused)
+            // Capture values now to avoid stale closure in timeout
+            const safeIdx = clampIndex(selectedIndex, currentList);
+            const taskToComplete = currentList[safeIdx];
+            const capturedIndex = safeIdx;
+            const capturedPane = activePane;
+            setFlashIndex(capturedIndex);
+
+            setTimeout(async () => {
+              await completeTask(taskToComplete);
+              // Use ref to get fresh state
+              const freshTasks = tasksRef.current;
+              const freshList = capturedPane === 'current' ? freshTasks.current : freshTasks.shelf;
+              const newList = freshList.filter((_, i) => i !== capturedIndex);
+              const newState = capturedPane === 'current'
+                ? { ...freshTasks, current: newList }
+                : { ...freshTasks, shelf: newList };
+              persist(newState);
+              setSelectedIndex(clampIndex(capturedIndex, newList));
               setFlashIndex(null);
               setExpandedIndex(null);
             }, 150);
@@ -314,22 +362,24 @@ function App() {
           e.preventDefault();
           if (expandedIndex !== null && currentNotes.length > 0) {
             // Delete selected note
-            const newNotes = currentNotes.filter((_, i) => i !== selectedNoteIndex);
+            const safeNoteIdx = clampNoteIndex(selectedNoteIndex, currentNotes);
+            const newNotes = currentNotes.filter((_, i) => i !== safeNoteIdx);
             const newList = [...currentList];
             newList[expandedIndex] = { ...newList[expandedIndex], notes: newNotes };
             const newState = activePane === 'current'
               ? { ...tasks, current: newList }
               : { ...tasks, shelf: newList };
-            await persist(newState);
-            setSelectedNoteIndex(clampNoteIndex(selectedNoteIndex, newNotes));
+            persist(newState);
+            setSelectedNoteIndex(clampNoteIndex(safeNoteIdx, newNotes));
           } else if (currentList.length > 0) {
             // Delete task
-            const newList = currentList.filter((_, i) => i !== selectedIndex);
+            const safeIdx = clampIndex(selectedIndex, currentList);
+            const newList = currentList.filter((_, i) => i !== safeIdx);
             const newState = activePane === 'current'
               ? { ...tasks, current: newList }
               : { ...tasks, shelf: newList };
-            await persist(newState);
-            setSelectedIndex(clampIndex(selectedIndex, newList));
+            persist(newState);
+            setSelectedIndex(clampIndex(safeIdx, newList));
             setExpandedIndex(null);
           }
         }
@@ -337,35 +387,41 @@ function App() {
       case 'm':
         if (expandedIndex !== null) return;
         if (currentList.length > 0) {
-          const task = currentList[selectedIndex];
-          
+          const safeIdx = clampIndex(selectedIndex, currentList);
+          const task = currentList[safeIdx];
+
           // If moving from shelf to current, check capacity
           if (activePane === 'shelf' && tasks.current.length >= MAX_CURRENT) {
             setShakePane(true);
             setTimeout(() => setShakePane(false), 300);
             break;
           }
-          
-          const newCurrentList = currentList.filter((_, i) => i !== selectedIndex);
+
+          const newCurrentList = currentList.filter((_, i) => i !== safeIdx);
           const newOtherList = [...otherList, task];
-          
+
           const newState = activePane === 'current'
             ? { current: newCurrentList, shelf: newOtherList }
             : { current: newOtherList, shelf: newCurrentList };
-          
-          await persist(newState);
-          setSelectedIndex(clampIndex(selectedIndex, newCurrentList));
+
+          persist(newState);
+          setSelectedIndex(clampIndex(safeIdx, newCurrentList));
         }
         break;
       case 'Escape':
-        if (expandedIndex !== null) {
+        if (showHelp) {
+          setShowHelp(false);
+        } else if (expandedIndex !== null) {
           setExpandedIndex(null);
         } else {
           await hideWindow();
         }
         break;
+      case '?':
+        setShowHelp(prev => !prev);
+        break;
     }
-  }, [activePane, currentList, otherList, selectedIndex, tasks, editingIndex, isCreating, persist, clampIndex, clampNoteIndex, expandedIndex, selectedNoteIndex, editingNoteIndex, isCreatingNote, undo]);
+  }, [activePane, currentList, otherList, selectedIndex, tasks, editingIndex, isCreating, persist, clampIndex, clampNoteIndex, expandedIndex, selectedNoteIndex, editingNoteIndex, isCreatingNote, undo, showHelp]);
 
   useEffect(() => {
     window.addEventListener('keydown', handleKeyDown);
@@ -628,6 +684,35 @@ function App() {
   return (
     <div className="container">
       {renderPane(activePane, currentList)}
+      {saveIndicator && <div className="save-indicator">saved</div>}
+      {showHelp && (
+        <div className="help-overlay" onClick={() => setShowHelp(false)}>
+          <div className="help-content" onClick={(e) => e.stopPropagation()}>
+            <div className="help-title">Keyboard Shortcuts</div>
+            <div className="help-section">
+              <div className="help-category">Navigation</div>
+              <div className="help-row"><span className="help-key">j / k</span><span>Move down / up</span></div>
+              <div className="help-row"><span className="help-key">Tab</span><span>Switch pane</span></div>
+              <div className="help-row"><span className="help-key">Enter</span><span>Expand task notes</span></div>
+            </div>
+            <div className="help-section">
+              <div className="help-category">Tasks</div>
+              <div className="help-row"><span className="help-key">o</span><span>New task / note</span></div>
+              <div className="help-row"><span className="help-key">a</span><span>Edit selected</span></div>
+              <div className="help-row"><span className="help-key">m</span><span>Move to other pane</span></div>
+              <div className="help-row"><span className="help-key">J / K</span><span>Reorder task</span></div>
+            </div>
+            <div className="help-section">
+              <div className="help-category">Actions</div>
+              <div className="help-row"><span className="help-key">⌘↵</span><span>Complete task / toggle note</span></div>
+              <div className="help-row"><span className="help-key">⌘⌫</span><span>Delete</span></div>
+              <div className="help-row"><span className="help-key">u</span><span>Undo</span></div>
+              <div className="help-row"><span className="help-key">Esc</span><span>Close / Hide</span></div>
+            </div>
+            <div className="help-footer">Press ? or Esc to close</div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

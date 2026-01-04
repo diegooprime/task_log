@@ -41,20 +41,22 @@ pub struct AppState {
     pub tasks: Mutex<TaskState>,
 }
 
-fn get_tasks_dir() -> PathBuf {
-    home_dir().unwrap().join(".tasks")
+fn get_tasks_dir() -> Result<PathBuf, String> {
+    home_dir()
+        .map(|h| h.join(".tasks"))
+        .ok_or_else(|| "Could not determine home directory".to_string())
 }
 
-fn get_state_file() -> PathBuf {
-    get_tasks_dir().join("state.json")
+fn get_state_file() -> Result<PathBuf, String> {
+    Ok(get_tasks_dir()?.join("state.json"))
 }
 
-fn get_done_file() -> PathBuf {
-    get_tasks_dir().join("done.md")
+fn get_done_file() -> Result<PathBuf, String> {
+    Ok(get_tasks_dir()?.join("done.md"))
 }
 
 fn ensure_tasks_dir() -> Result<(), String> {
-    let dir = get_tasks_dir();
+    let dir = get_tasks_dir()?;
     if !dir.exists() {
         fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     }
@@ -62,12 +64,28 @@ fn ensure_tasks_dir() -> Result<(), String> {
 }
 
 fn load_tasks() -> TaskState {
-    let path = get_state_file();
+    let path = match get_state_file() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("Warning: {}", e);
+            return TaskState::default();
+        }
+    };
+
     if path.exists() {
-        if let Ok(content) = fs::read_to_string(&path) {
-            if let Ok(state) = serde_json::from_str(&content) {
-                return state;
+        match fs::read_to_string(&path) {
+            Ok(content) => {
+                match serde_json::from_str(&content) {
+                    Ok(state) => return state,
+                    Err(e) => {
+                        eprintln!("Warning: Failed to parse state file: {}. Starting fresh.", e);
+                        // Backup the corrupted file
+                        let backup_path = path.with_extension("json.corrupted");
+                        let _ = fs::rename(&path, &backup_path);
+                    }
+                }
             }
+            Err(e) => eprintln!("Warning: Failed to read state file: {}", e),
         }
     }
     TaskState::default()
@@ -75,16 +93,23 @@ fn load_tasks() -> TaskState {
 
 fn save_tasks(state: &TaskState) -> Result<(), String> {
     ensure_tasks_dir()?;
-    let path = get_state_file();
+    let path = get_state_file()?;
     let content = serde_json::to_string_pretty(state).map_err(|e| e.to_string())?;
     fs::write(path, content).map_err(|e| e.to_string())
 }
 
-fn append_done(task: &str) -> Result<(), String> {
+fn append_done(task: &Task) -> Result<(), String> {
     ensure_tasks_dir()?;
-    let path = get_done_file();
+    let path = get_done_file()?;
     let date = Local::now().format("%Y-%m-%d").to_string();
-    let line = format!("- {}: {}\n", date, task);
+
+    let mut content = format!("- {}: {}\n", date, task.text);
+
+    // Include notes if any exist
+    for note in &task.notes {
+        let status = if note.completed { "✓" } else { "○" };
+        content.push_str(&format!("  {} {}\n", status, note.text));
+    }
 
     let mut file = OpenOptions::new()
         .create(true)
@@ -92,23 +117,23 @@ fn append_done(task: &str) -> Result<(), String> {
         .open(path)
         .map_err(|e| e.to_string())?;
 
-    file.write_all(line.as_bytes()).map_err(|e| e.to_string())
+    file.write_all(content.as_bytes()).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn get_tasks(state: tauri::State<AppState>) -> TaskState {
-    state.tasks.lock().unwrap().clone()
+    state.tasks.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
 #[tauri::command]
 fn save_state(new_state: TaskState, state: tauri::State<AppState>) -> Result<(), String> {
-    let mut tasks = state.tasks.lock().unwrap();
+    let mut tasks = state.tasks.lock().unwrap_or_else(|e| e.into_inner());
     *tasks = new_state.clone();
     save_tasks(&tasks)
 }
 
 #[tauri::command]
-fn complete_task(task: String, _state: tauri::State<AppState>) -> Result<(), String> {
+fn complete_task(task: Task, _state: tauri::State<AppState>) -> Result<(), String> {
     append_done(&task)?;
     Ok(())
 }
@@ -118,6 +143,23 @@ fn hide_window(app: AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.hide();
     }
+}
+
+#[tauri::command]
+fn archive_done() -> Result<String, String> {
+    let done_file = get_done_file()?;
+    if !done_file.exists() {
+        return Err("No completed tasks to archive".to_string());
+    }
+
+    let date = Local::now().format("%Y-%m-%d_%H%M%S").to_string();
+    let archive_name = format!("done_{}.md", date);
+    let archive_path = get_tasks_dir()?.join(&archive_name);
+
+    fs::copy(&done_file, &archive_path).map_err(|e| e.to_string())?;
+    fs::write(&done_file, "").map_err(|e| e.to_string())?;
+
+    Ok(archive_name)
 }
 
 fn toggle_window(app: &AppHandle) {
@@ -157,6 +199,7 @@ pub fn run() {
             save_state,
             complete_task,
             hide_window,
+            archive_done,
         ])
         .setup(|app| {
             // Hide from dock on macOS
@@ -168,17 +211,33 @@ pub fn run() {
             }
 
             // Create tray menu
+            let archive_item = MenuItem::with_id(app, "archive", "Archive Completed", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&quit_item])?;
+            let menu = Menu::with_items(app, &[&archive_item, &quit_item])?;
+
+            // Calculate initial task count for tooltip
+            let task_count = {
+                let state = app.state::<AppState>();
+                let tasks = state.tasks.lock().unwrap_or_else(|e| e.into_inner());
+                tasks.current.len() + tasks.shelf.len()
+            };
+            let tooltip = format!("Task Log ({} tasks)", task_count);
 
             // Build tray icon
             let _tray = TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
                 .menu(&menu)
+                .tooltip(&tooltip)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| {
-                    if event.id.as_ref() == "quit" {
-                        app.exit(0);
+                    match event.id.as_ref() {
+                        "archive" => {
+                            let _ = archive_done();
+                        }
+                        "quit" => {
+                            app.exit(0);
+                        }
+                        _ => {}
                     }
                 })
                 .on_tray_icon_event(|tray, event| {

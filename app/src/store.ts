@@ -24,9 +24,14 @@ export async function saveTasks(state: TaskState): Promise<void> {
 }
 
 export async function completeTask(task: Task): Promise<void> {
-  await invoke('complete_task', { task: task.text });
+  // Pass full task object so notes can be logged
+  await invoke('complete_task', { task });
 }
 
 export async function hideWindow(): Promise<void> {
   await invoke('hide_window');
+}
+
+export async function archiveDone(): Promise<string> {
+  return await invoke<string>('archive_done');
 }

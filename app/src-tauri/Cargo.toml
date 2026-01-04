@@ -2,7 +2,7 @@
 name = "task_log"
 version = "0.1.0"
 description = "A minimal, keyboard-driven floating window app for managing active tasks"
-authors = ["you"]
+authors = []
 edition = "2021"
 
 [lib]
