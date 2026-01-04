@@ -79,27 +79,27 @@ function App() {
 
   // Fix focus when window regains focus
   useEffect(() => {
-    const handleFocus = () => {
-      // Refocus container when window regains focus
-      if (!editingIndex && !isCreating && !editingNoteIndex && !isCreatingNote) {
+    const handleWindowFocus = () => {
+      // Refocus container when window regains focus (only if not editing)
+      if (editingIndex === null && !isCreating && editingNoteIndex === null && !isCreatingNote) {
         containerRef.current?.focus();
       }
     };
     
     const handleVisibilityChange = () => {
       if (!document.hidden) {
-        handleFocus();
+        handleWindowFocus();
       }
     };
 
-    window.addEventListener('focus', handleFocus);
+    window.addEventListener('focus', handleWindowFocus);
     document.addEventListener('visibilitychange', handleVisibilityChange);
     
     // Initial focus
     containerRef.current?.focus();
     
     return () => {
-      window.removeEventListener('focus', handleFocus);
+      window.removeEventListener('focus', handleWindowFocus);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, [editingIndex, isCreating, editingNoteIndex, isCreatingNote]);
