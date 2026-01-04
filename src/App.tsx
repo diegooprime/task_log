@@ -41,7 +41,7 @@ const renderTextWithLinks = (text: string) => {
 
 type Pane = 'current' | 'shelf';
 
-const MAX_CURRENT = 5;
+const MAX_CURRENT = 10;
 const MAX_HISTORY = 50;
 
 function App() {

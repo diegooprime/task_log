@@ -15,7 +15,7 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut,
 #[cfg(target_os = "macos")]
 use objc2::MainThreadMarker;
 #[cfg(target_os = "macos")]
-use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
+use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy, NSEvent, NSScreen};
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct Note {
@@ -167,16 +167,55 @@ fn toggle_window(app: &AppHandle) {
         if window.is_visible().unwrap_or(false) {
             let _ = window.hide();
         } else {
-            // Position window at top right corner of the screen
-            if let Ok(Some(monitor)) = window.primary_monitor() {
-                let screen_size = monitor.size();
-                let screen_position = monitor.position();
-                if let Ok(window_size) = window.outer_size() {
-                    let x = screen_position.x + (screen_size.width as i32) - (window_size.width as i32);
-                    let y = screen_position.y;
-                    let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+            #[cfg(target_os = "macos")]
+            {
+                let mtm = MainThreadMarker::new().unwrap();
+
+                // Get mouse position (in screen coordinates, origin bottom-left)
+                let mouse_pos = NSEvent::mouseLocation();
+                let screens = NSScreen::screens(mtm);
+
+                // Find which screen contains the mouse cursor
+                for screen in screens.iter() {
+                    let frame = screen.frame();
+
+                    // Check if mouse is within this screen's bounds
+                    if mouse_pos.x >= frame.origin.x
+                        && mouse_pos.x < frame.origin.x + frame.size.width
+                        && mouse_pos.y >= frame.origin.y
+                        && mouse_pos.y < frame.origin.y + frame.size.height
+                    {
+                        let window_width = 400.0; // Fixed window width from tauri.conf.json
+
+                        // Position at top-right of this screen
+                        let x = frame.origin.x + frame.size.width - window_width;
+                        let y = frame.origin.y + frame.size.height; // Top of screen in Cocoa coords
+
+                        // Convert to Tauri coordinates (top-left origin)
+                        if let Some(main_screen) = NSScreen::mainScreen(mtm) {
+                            let main_height = main_screen.frame().size.height;
+                            let flipped_y = main_height - y;
+                            let _ = window.set_position(tauri::LogicalPosition::new(x, flipped_y));
+                        }
+                        break;
+                    }
                 }
             }
+
+            #[cfg(not(target_os = "macos"))]
+            {
+                // Fallback for non-macOS: use primary monitor
+                if let Ok(Some(monitor)) = window.primary_monitor() {
+                    let screen_size = monitor.size();
+                    let screen_position = monitor.position();
+                    if let Ok(window_size) = window.outer_size() {
+                        let x = screen_position.x + (screen_size.width as i32) - (window_size.width as i32);
+                        let y = screen_position.y;
+                        let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+                    }
+                }
+            }
+
             let _ = window.show();
             let _ = window.set_focus();
         }
