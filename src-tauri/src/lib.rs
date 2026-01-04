@@ -37,8 +37,29 @@ pub struct TaskState {
     pub shelf: Vec<Task>,
 }
 
+/// App configuration including hotkey settings
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AppConfig {
+    #[serde(default = "default_hotkey")]
+    pub hotkey: String,
+}
+
+fn default_hotkey() -> String {
+    "Cmd+Ctrl+Alt+Shift+=".to_string()
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            hotkey: default_hotkey(),
+        }
+    }
+}
+
 pub struct AppState {
     pub tasks: Mutex<TaskState>,
+    pub config: Mutex<AppConfig>,
+    pub current_shortcut: Mutex<Option<Shortcut>>,
 }
 
 fn get_tasks_dir() -> Result<PathBuf, String> {
@@ -55,12 +76,101 @@ fn get_done_file() -> Result<PathBuf, String> {
     Ok(get_tasks_dir()?.join("done.md"))
 }
 
+fn get_config_file() -> Result<PathBuf, String> {
+    Ok(get_tasks_dir()?.join("config.json"))
+}
+
 fn ensure_tasks_dir() -> Result<(), String> {
     let dir = get_tasks_dir()?;
     if !dir.exists() {
         fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+fn load_config() -> AppConfig {
+    let path = match get_config_file() {
+        Ok(p) => p,
+        Err(_) => return AppConfig::default(),
+    };
+
+    if path.exists() {
+        if let Ok(content) = fs::read_to_string(&path) {
+            if let Ok(config) = serde_json::from_str(&content) {
+                return config;
+            }
+        }
+    }
+    AppConfig::default()
+}
+
+fn save_config(config: &AppConfig) -> Result<(), String> {
+    ensure_tasks_dir()?;
+    let path = get_config_file()?;
+    let content = serde_json::to_string_pretty(config).map_err(|e| e.to_string())?;
+    fs::write(path, content).map_err(|e| e.to_string())
+}
+
+/// Parse a hotkey string like "Cmd+Ctrl+Alt+Shift+=" into a Shortcut
+fn parse_hotkey(hotkey: &str) -> Result<Shortcut, String> {
+    let parts: Vec<&str> = hotkey.split('+').collect();
+    if parts.is_empty() {
+        return Err("Empty hotkey".to_string());
+    }
+
+    let mut modifiers = Modifiers::empty();
+    let key_str = parts.last().ok_or("No key specified")?;
+
+    for part in &parts[..parts.len() - 1] {
+        match part.to_lowercase().as_str() {
+            "cmd" | "command" | "super" | "meta" => modifiers |= Modifiers::SUPER,
+            "ctrl" | "control" => modifiers |= Modifiers::CONTROL,
+            "alt" | "option" => modifiers |= Modifiers::ALT,
+            "shift" => modifiers |= Modifiers::SHIFT,
+            _ => return Err(format!("Unknown modifier: {}", part)),
+        }
+    }
+
+    let code = match key_str.to_lowercase().as_str() {
+        "a" => Code::KeyA, "b" => Code::KeyB, "c" => Code::KeyC, "d" => Code::KeyD,
+        "e" => Code::KeyE, "f" => Code::KeyF, "g" => Code::KeyG, "h" => Code::KeyH,
+        "i" => Code::KeyI, "j" => Code::KeyJ, "k" => Code::KeyK, "l" => Code::KeyL,
+        "m" => Code::KeyM, "n" => Code::KeyN, "o" => Code::KeyO, "p" => Code::KeyP,
+        "q" => Code::KeyQ, "r" => Code::KeyR, "s" => Code::KeyS, "t" => Code::KeyT,
+        "u" => Code::KeyU, "v" => Code::KeyV, "w" => Code::KeyW, "x" => Code::KeyX,
+        "y" => Code::KeyY, "z" => Code::KeyZ,
+        "0" => Code::Digit0, "1" => Code::Digit1, "2" => Code::Digit2, "3" => Code::Digit3,
+        "4" => Code::Digit4, "5" => Code::Digit5, "6" => Code::Digit6, "7" => Code::Digit7,
+        "8" => Code::Digit8, "9" => Code::Digit9,
+        "=" | "equal" => Code::Equal,
+        "-" | "minus" => Code::Minus,
+        "[" | "bracketleft" => Code::BracketLeft,
+        "]" | "bracketright" => Code::BracketRight,
+        "\\" | "backslash" => Code::Backslash,
+        ";" | "semicolon" => Code::Semicolon,
+        "'" | "quote" => Code::Quote,
+        "`" | "backquote" => Code::Backquote,
+        "," | "comma" => Code::Comma,
+        "." | "period" => Code::Period,
+        "/" | "slash" => Code::Slash,
+        "space" => Code::Space,
+        "enter" | "return" => Code::Enter,
+        "tab" => Code::Tab,
+        "escape" | "esc" => Code::Escape,
+        "backspace" => Code::Backspace,
+        "delete" => Code::Delete,
+        "up" => Code::ArrowUp,
+        "down" => Code::ArrowDown,
+        "left" => Code::ArrowLeft,
+        "right" => Code::ArrowRight,
+        "f1" => Code::F1, "f2" => Code::F2, "f3" => Code::F3, "f4" => Code::F4,
+        "f5" => Code::F5, "f6" => Code::F6, "f7" => Code::F7, "f8" => Code::F8,
+        "f9" => Code::F9, "f10" => Code::F10, "f11" => Code::F11, "f12" => Code::F12,
+        _ => return Err(format!("Unknown key: {}", key_str)),
+    };
+
+    let mods = if modifiers.is_empty() { None } else { Some(modifiers) };
+    Ok(Shortcut::new(mods, code))
 }
 
 fn load_tasks() -> TaskState {
@@ -162,6 +272,48 @@ fn archive_done() -> Result<String, String> {
     Ok(archive_name)
 }
 
+#[tauri::command]
+fn get_hotkey(state: tauri::State<AppState>) -> String {
+    state.config.lock().unwrap_or_else(|e| e.into_inner()).hotkey.clone()
+}
+
+#[tauri::command]
+fn set_hotkey(hotkey: String, app: AppHandle, state: tauri::State<AppState>) -> Result<(), String> {
+    // Validate the hotkey can be parsed
+    let new_shortcut = parse_hotkey(&hotkey)?;
+
+    // Unregister the old shortcut
+    {
+        let current = state.current_shortcut.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(old_shortcut) = current.as_ref() {
+            let _ = app.global_shortcut().unregister(*old_shortcut);
+        }
+    }
+
+    // Register the new shortcut
+    let app_handle = app.clone();
+    app.global_shortcut().on_shortcut(new_shortcut, move |_app, _shortcut, event| {
+        if event.state == ShortcutState::Pressed {
+            toggle_window(&app_handle);
+        }
+    }).map_err(|e| e.to_string())?;
+
+    // Update the stored shortcut
+    {
+        let mut current = state.current_shortcut.lock().unwrap_or_else(|e| e.into_inner());
+        *current = Some(new_shortcut);
+    }
+
+    // Save to config
+    {
+        let mut config = state.config.lock().unwrap_or_else(|e| e.into_inner());
+        config.hotkey = hotkey;
+        save_config(&config)?;
+    }
+
+    Ok(())
+}
+
 fn toggle_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         if window.is_visible().unwrap_or(false) {
@@ -225,6 +377,7 @@ fn toggle_window(app: &AppHandle) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let initial_state = load_tasks();
+    let initial_config = load_config();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -232,6 +385,8 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .manage(AppState {
             tasks: Mutex::new(initial_state),
+            config: Mutex::new(initial_config.clone()),
+            current_shortcut: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
             get_tasks,
@@ -239,8 +394,10 @@ pub fn run() {
             complete_task,
             hide_window,
             archive_done,
+            get_hotkey,
+            set_hotkey,
         ])
-        .setup(|app| {
+        .setup(move |app| {
             // Hide from dock on macOS
             #[cfg(target_os = "macos")]
             {
@@ -286,11 +443,19 @@ pub fn run() {
                 })
                 .build(app)?;
 
-            // Register global shortcut: Hyper + = (Cmd+Ctrl+Alt+Shift + =)
-            let shortcut = Shortcut::new(
-                Some(Modifiers::SUPER | Modifiers::CONTROL | Modifiers::ALT | Modifiers::SHIFT),
-                Code::Equal,
-            );
+            // Register global shortcut from config
+            let shortcut = parse_hotkey(&initial_config.hotkey)
+                .unwrap_or_else(|_| Shortcut::new(
+                    Some(Modifiers::SUPER | Modifiers::CONTROL | Modifiers::ALT | Modifiers::SHIFT),
+                    Code::Equal,
+                ));
+
+            // Store the current shortcut
+            {
+                let state = app.state::<AppState>();
+                let mut current = state.current_shortcut.lock().unwrap_or_else(|e| e.into_inner());
+                *current = Some(shortcut);
+            }
 
             let app_handle = app.handle().clone();
             app.global_shortcut().on_shortcut(shortcut, move |_app, _shortcut, event| {

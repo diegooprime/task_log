@@ -35,3 +35,11 @@ export async function hideWindow(): Promise<void> {
 export async function archiveDone(): Promise<string> {
   return await invoke<string>('archive_done');
 }
+
+export async function getHotkey(): Promise<string> {
+  return await invoke<string>('get_hotkey');
+}
+
+export async function setHotkey(hotkey: string): Promise<void> {
+  await invoke('set_hotkey', { hotkey });
+}

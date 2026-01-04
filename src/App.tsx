@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
-import { getTasks, saveTasks, completeTask, hideWindow, TaskState, Task, Note } from './store';
+import { getTasks, saveTasks, completeTask, hideWindow, getHotkey, setHotkey, TaskState, Task, Note } from './store';
 import './App.css';
 
 // Debounce helper
@@ -44,6 +44,40 @@ type Pane = 'current' | 'shelf';
 const MAX_CURRENT = 10;
 const MAX_HISTORY = 50;
 
+// Convert keyboard event to hotkey string
+function eventToHotkeyString(e: KeyboardEvent): string | null {
+  const parts: string[] = [];
+
+  // Must have at least one modifier for a global hotkey
+  if (!e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
+    return null;
+  }
+
+  if (e.metaKey) parts.push('Cmd');
+  if (e.ctrlKey) parts.push('Ctrl');
+  if (e.altKey) parts.push('Alt');
+  if (e.shiftKey) parts.push('Shift');
+
+  // Get the key
+  let key = e.key;
+
+  // Skip if only modifier keys are pressed
+  if (['Meta', 'Control', 'Alt', 'Shift'].includes(key)) {
+    return null;
+  }
+
+  // Normalize key names
+  if (key === ' ') key = 'Space';
+  else if (key.length === 1) key = key.toUpperCase();
+  else if (key === 'ArrowUp') key = 'Up';
+  else if (key === 'ArrowDown') key = 'Down';
+  else if (key === 'ArrowLeft') key = 'Left';
+  else if (key === 'ArrowRight') key = 'Right';
+
+  parts.push(key);
+  return parts.join('+');
+}
+
 function App() {
   const [tasks, setTasks] = useState<TaskState>({ current: [], shelf: [] });
   const [history, setHistory] = useState<TaskState[]>([]);
@@ -59,6 +93,10 @@ function App() {
   const [editingNoteIndex, setEditingNoteIndex] = useState<number | null>(null);
   const [isCreatingNote, setIsCreatingNote] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [currentHotkey, setCurrentHotkey] = useState('');
+  const [pendingHotkey, setPendingHotkey] = useState<string | null>(null);
+  const [hotkeyError, setHotkeyError] = useState<string | null>(null);
   const [saveIndicator, setSaveIndicator] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const noteInputRef = useRef<HTMLInputElement>(null);
@@ -85,6 +123,7 @@ function App() {
 
   useEffect(() => {
     getTasks().then(setTasks);
+    getHotkey().then(setCurrentHotkey);
   }, []);
 
   useEffect(() => {
@@ -122,6 +161,45 @@ function App() {
       window.removeEventListener('focus', handleWindowFocus);
     };
   }, []);
+
+  // Handle hotkey capture in settings mode
+  useEffect(() => {
+    if (!showSettings) return;
+
+    const handleHotkeyCapture = (e: KeyboardEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      if (e.key === 'Escape') {
+        setShowSettings(false);
+        setPendingHotkey(null);
+        setHotkeyError(null);
+        return;
+      }
+
+      const hotkeyStr = eventToHotkeyString(e);
+      if (hotkeyStr) {
+        setPendingHotkey(hotkeyStr);
+        setHotkeyError(null);
+      }
+    };
+
+    window.addEventListener('keydown', handleHotkeyCapture);
+    return () => window.removeEventListener('keydown', handleHotkeyCapture);
+  }, [showSettings]);
+
+  const saveHotkey = async () => {
+    if (!pendingHotkey) return;
+    try {
+      await setHotkey(pendingHotkey);
+      setCurrentHotkey(pendingHotkey);
+      setPendingHotkey(null);
+      setShowSettings(false);
+      setHotkeyError(null);
+    } catch (err) {
+      setHotkeyError(err instanceof Error ? err.message : 'Failed to set hotkey');
+    }
+  };
 
   const pushHistory = useCallback((state: TaskState) => {
     setHistory(prev => {
@@ -164,6 +242,9 @@ function App() {
   }, []);
 
   const handleKeyDown = useCallback(async (e: KeyboardEvent) => {
+    // Settings mode handles its own keys
+    if (showSettings) return;
+
     // If editing task or note, only handle edit-specific keys
     if (editingIndex !== null || isCreating || editingNoteIndex !== null || isCreatingNote) {
       if (e.key === 'Escape') {
@@ -420,8 +501,15 @@ function App() {
       case '?':
         setShowHelp(prev => !prev);
         break;
+      case 's':
+        if (expandedIndex === null) {
+          setShowSettings(true);
+          setPendingHotkey(null);
+          setHotkeyError(null);
+        }
+        break;
     }
-  }, [activePane, currentList, otherList, selectedIndex, tasks, editingIndex, isCreating, persist, clampIndex, clampNoteIndex, expandedIndex, selectedNoteIndex, editingNoteIndex, isCreatingNote, undo, showHelp]);
+  }, [activePane, currentList, otherList, selectedIndex, tasks, editingIndex, isCreating, persist, clampIndex, clampNoteIndex, expandedIndex, selectedNoteIndex, editingNoteIndex, isCreatingNote, undo, showHelp, showSettings]);
 
   useEffect(() => {
     window.addEventListener('keydown', handleKeyDown);
@@ -710,6 +798,45 @@ function App() {
               <div className="help-row"><span className="help-key">Esc</span><span>Close / Hide</span></div>
             </div>
             <div className="help-footer">Press ? or Esc to close</div>
+          </div>
+        </div>
+      )}
+      {showSettings && (
+        <div className="help-overlay" onClick={() => { setShowSettings(false); setPendingHotkey(null); setHotkeyError(null); }}>
+          <div className="help-content settings-content" onClick={(e) => e.stopPropagation()}>
+            <div className="help-title">Settings</div>
+            <div className="help-section">
+              <div className="help-category">Global Hotkey</div>
+              <div className="hotkey-display">
+                <span className="hotkey-label">Current:</span>
+                <span className="hotkey-value">{currentHotkey}</span>
+              </div>
+              <div className="hotkey-capture">
+                <span className="hotkey-label">New:</span>
+                <span className={`hotkey-input ${pendingHotkey ? 'has-value' : ''}`}>
+                  {pendingHotkey || 'Press keys...'}
+                </span>
+              </div>
+              {hotkeyError && (
+                <div className="hotkey-error">{hotkeyError}</div>
+              )}
+              <div className="hotkey-actions">
+                <button
+                  className="hotkey-button save"
+                  onClick={saveHotkey}
+                  disabled={!pendingHotkey}
+                >
+                  Save
+                </button>
+                <button
+                  className="hotkey-button cancel"
+                  onClick={() => { setShowSettings(false); setPendingHotkey(null); setHotkeyError(null); }}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+            <div className="help-footer">Press Esc to cancel</div>
           </div>
         </div>
       )}
